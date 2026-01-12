@@ -43,8 +43,19 @@ with pyodbc.connect('DRIVER='+driver+';SERVER=tcp:'+server+';PORT=1433;DATABASE=
 
         i = 0
         for row in rows:
+
+
             # Créer un objet Node avec comme label Film et les propriétés adéquates
             # A COMPLETER
+            # Crée un nœud Neo4j avec le label "Film"
+            # Les propriétés sont extraites des colonnes SQL :
+            # - row[0] = idFilm (identifiant unique du film)
+            # - row[1] = primaryTitle (titre principal du film)
+            # - row[2] = startYear (année de sortie du film)
+            n = Node("Film", idFilm=row[0], primaryTitle=row[1], startYear=row[2])
+            # Ajoute le nœud créé à la liste importData pour traitement en lot
+
+
             importData.append(n)
             i += 1
 
@@ -59,11 +70,58 @@ with pyodbc.connect('DRIVER='+driver+';SERVER=tcp:'+server+';PORT=1433;DATABASE=
     # En vous basant sur ce qui a été fait dans la section précédente, exportez les données de la table tArtist
     # A COMPLETER
 
+
+    # Initialisation du compteur pour le suivi de la progression
+    exportedCount = 0
+    # Récupère le nombre total d'artistes dans la table tArtist
+    cursor.execute("SELECT COUNT(1) FROM tArtist")
+    totalCount = cursor.fetchval()
+    # Requête SQL pour récupérer les données des artistes
+    # idArtist : identifiant unique de l'artiste
+    # primaryName : nom principal de l'artiste
+    # birthYear : année de naissance de l'artiste
+    cursor.execute("SELECT idArtist, primaryName, birthYear FROM tArtist")
+    
+    # Boucle de traitement par lots (BATCH_SIZE = 10000 lignes à la fois)
+    while True:
+        importData = []
+        # Récupère le prochain lot de lignes
+        rows = cursor.fetchmany(BATCH_SIZE)
+        # Si aucune ligne n'est retournée, fin du traitement
+        if not rows:
+            break
+
+        # Pour chaque ligne du lot
+        for row in rows:
+            # Crée un nœud Neo4j avec le label "Artist"
+            # Les propriétés sont extraites des colonnes SQL :
+            # - row[0] = idArtist (identifiant unique de l'artiste)
+            # - row[1] = primaryName (nom principal de l'artiste)
+            # - row[2] = birthYear (année de naissance de l'artiste)
+            n = Node("Artist", idArtist=row[0], primaryName=row[1], birthYear=row[2])
+            # Ajoute le nœud créé à la liste importData pour traitement en lot
+            importData.append(n)
+
+        try:
+            # Insère tous les nœuds Artist du lot dans Neo4j
+            # graph.auto() utilise l'objet Graph configuré
+            # labels={"Artist"} spécifie le label des nœuds
+            create_nodes(graph.auto(), importData, labels={"Artist"})
+            # Mise à jour du compteur de nœuds exportés
+            exportedCount += len(rows)
+            # Affiche la progression
+            print(f"{exportedCount}/{totalCount} artist records exported to Neo4j")
+        except Exception as error:
+            # Gestion des erreurs lors de l'insertion
+            print(error)
+
+
+
     try:
         print("Indexing Film nodes...")
-        graph.run("CREATE INDEX ON :Film(idFilm)")
+        graph.run("CREATE INDEX IF NOT EXISTS FOR (f:Film) ON (f.idFilm)")
         print("Indexing Name (Artist) nodes...")
-        graph.run("CREATE INDEX ON :Artist(idArtist)")
+        graph.run("CREATE INDEX IF NOT EXISTS FOR (a:Artist) ON (a.idArtist)")
     except Exception as error:
         print(error)
 
@@ -90,8 +148,25 @@ with pyodbc.connect('DRIVER='+driver+';SERVER=tcp:'+server+';PORT=1433;DATABASE=
                 # https://py2neo.org/2021.1/bulk/index.html
                 # ATTENTION: remplacez les espaces par des _ pour nommer les types de relation
                 # A COMPLETER
-                None # Remplacez None par votre code
+
+
+                # Vérifie que la catégorie a des relations à créer
+                if importData[cat]:
+                    # Remplace les espaces par des underscores dans le nom de la relation
+                    # Exemple : "acted in" devient "acted_in"
+                    rel_type = cat.replace(" ", "_")
+                    # Crée les relations en masse entre les nœuds Artist et Film
+                    # importData[cat] contient les tuples (idArtist, {}, idFilm)
+                    # start_node_key=("Artist", "idArtist") : le nœud source est un Artist identifié par idArtist
+                    # end_node_key=("Film", "idFilm") : le nœud destination est un Film identifié par idFilm
+                    # rel_type : le type de relation (ex: "acted_in", "directed", etc.)
+                    create_relationships(graph.auto(), importData[cat], rel_type, start_node_key=("Artist", "idArtist"), end_node_key=("Film", "idFilm"))
+            # Mise à jour du compteur de relations exportées
+
+
             exportedCount += len(rows)
+            # Affiche la progression
             print(f"{exportedCount}/{totalCount} relationships exported to Neo4j")
         except Exception as error:
+            # Gestion des erreurs lors de la création des relations
             print(error)
